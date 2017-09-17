@@ -54,6 +54,13 @@ public class MainActivity extends AppCompatActivity {
 
         List<TOASPosition> toasList = db.getAllToas();
 
+        Collections.sort(toasList, new Comparator<TOASPosition>() {
+            @Override
+            public int compare(TOASPosition lhs, TOASPosition rhs) {
+                return lhs.getPos() - rhs.getPos();
+            }
+        });
+
         if(toasList.isEmpty()) {
             TableRow row = new TableRow(this);
             TableRow.LayoutParams lp = new TableRow.LayoutParams(TableRow.LayoutParams.WRAP_CONTENT);
