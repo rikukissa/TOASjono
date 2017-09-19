@@ -1,17 +1,10 @@
 package fi.naf.toasjono;
 
-import android.app.IntentService;
-import android.content.Intent;
 import android.content.Context;
-import android.content.SharedPreferences;
-import android.preference.PreferenceManager;
 import android.util.Log;
-import android.view.View;
-import android.widget.TextView;
 
 import com.android.volley.DefaultRetryPolicy;
 import com.android.volley.Request;
-import com.android.volley.Response;
 import com.android.volley.RetryPolicy;
 import com.android.volley.VolleyError;
 import com.android.volley.toolbox.StringRequest;
@@ -22,165 +15,147 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import java.util.Calendar;
-import java.util.Date;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
-public class ToasService extends IntentService {
+public class ToasService {
+    private static class PageFields {
+        public String viewState;
+        public String eventValidate;
+        public String viewStateGenerator;
+        public String muokkausCount;
+
+        public PageFields(String viewState, String eventValidate, String viewStateGenerator) {
+            this.viewState = viewState;
+            this.eventValidate = eventValidate;
+            this.viewStateGenerator = viewStateGenerator;
+        }
+        public PageFields(String viewState, String eventValidate, String viewStateGenerator, String muokkausCount) {
+            this.viewState = viewState;
+            this.eventValidate = eventValidate;
+            this.viewStateGenerator = viewStateGenerator;
+            this.muokkausCount = muokkausCount;
+        }
+    }
+
     private static final String url = "https://asukas.toas.fi/sahkoisetpalvelut/hakemuksenmuokkaus/default.aspx";;
 
-    public ToasService() {
-        super("ToasService");
+    public static CompletableFuture<List<TOASPosition>> getQueues(Context context) {
+        return getLoginData(context)
+            .thenCompose((fields) -> loginWithData(context, fields))
+            .thenCompose((fields) -> getQueueNumbers(context, fields));
     }
 
-    @Override
-    protected void onHandleIntent(Intent intent) {
-        // Do the task here
-        Log.i("MyTestService", "Service running");
-        DBHandler db = new DBHandler(this);
-
-        Log.i("data", Integer.toString(db.getQueue(170)));
-        Log.i("data", Integer.toString(db.getQueue(130)));
-
-        getLoginData();
+    private static PageFields parsePageFields(Document document) {
+        String VIEWSTATE_SELECTOR = "#__VIEWSTATE";
+        String EVENTVALIDATION_SELECTOR = "#__EVENTVALIDATION";
+        String VIEWSTATEGENERATOR_SELECTOR = "#__VIEWSTATEGENERATOR";
+        String viewState = document.select(VIEWSTATE_SELECTOR).attr("value");
+        String eventValidate = document.select(EVENTVALIDATION_SELECTOR).attr("value");
+        String viewStateGenerator = document.select(VIEWSTATEGENERATOR_SELECTOR).attr("value");
+        return new PageFields(viewState, eventValidate, viewStateGenerator);
     }
 
-    private void getLoginData() {
-        // Instantiate the RequestQueue.
-        StringRequest stringRequest = new StringRequest(Request.Method.GET, url,
-                new Response.Listener<String>() {
-                    @Override
-                    public void onResponse(String response) {
-                        Document document = Jsoup.parse(response);
-                        String viewState = document.select("#__VIEWSTATE").attr("value");
-                        String eventValidate = document.select("#__EVENTVALIDATION").attr("value");
-                        String viewStateGenerator = document.select("#__VIEWSTATEGENERATOR").attr("value");
-
-                        Log.i("viewstate", viewState);
-                        Log.i("eventvalidate", eventValidate);
-                        Log.i("viewStateGenerator", viewStateGenerator);
-
-                        loginWithData(viewState, eventValidate, viewStateGenerator);
-
-                        Log.d("getLoginData", "yes");
-                    }
-                },
-                new Response.ErrorListener() {
-                    @Override
-                    public void onErrorResponse(VolleyError error) {
-                        Log.i("error", error.getMessage());
-                    }
-                }
-        );
-
-        Volley.newRequestQueue(getApplicationContext()).add(stringRequest);
+    private static CompletableFuture<PageFields> getLoginData(Context context) {
+        CompletableFuture<PageFields> future = new CompletableFuture<>();
+        StringRequest stringRequest = new StringRequest(Request.Method.GET, url, (String response) -> {
+            Document document = Jsoup.parse(response);
+            future.complete(parsePageFields(document));
+        },
+        error -> {
+            Log.d("Error.Response", error.getMessage());
+            future.completeExceptionally(error);
+        });
+        Volley.newRequestQueue(context).add(stringRequest);
+        return future;
     }
-    private void loginWithData(final String viewState, final String eventValidate, final String viewStateGenerator) {
-        StringRequest postRequest = new StringRequest(Request.Method.POST, url,
-                new Response.Listener<String>() {
-                    @Override
-                    public void onResponse(String response) {
-                        Document document = Jsoup.parse(response);
 
-                        String viewState = document.select("#__VIEWSTATE").attr("value");
-                        String eventValidate = document.select("#__EVENTVALIDATION").attr("value");
-                        String viewStateGenerator = document.select("#__VIEWSTATEGENERATOR").attr("value");
-                        String muokkausCount = document.select("[id~=(.+)hdf_Count").attr("value");
+    private static CompletableFuture<PageFields> loginWithData(Context context, PageFields pageFields) {
 
-                        getQueueNumbers(viewState, eventValidate, viewStateGenerator, muokkausCount);
-
-                        Log.d("mCount", muokkausCount);
-                        Log.d("loginData", "yes");
-                    }
-                },
-                new Response.ErrorListener() {
-                    @Override
-                    public void onErrorResponse(VolleyError error) {
-                        // error
-                        Log.d("Error.Response", error.getMessage());
-                    }
-                }
-        ) {
+        CompletableFuture<PageFields> future = new CompletableFuture<>();
+        StringRequest postRequest = new StringRequest(Request.Method.POST, url, (response) -> {
+            Document document = Jsoup.parse(response);
+            PageFields newPageFields = parsePageFields(document);
+            String muokkausCount = document.select("[id~=(.+)hdf_Count").attr("value");
+            newPageFields.muokkausCount = muokkausCount;
+            future.complete(newPageFields);
+        } , (error) -> {
+            // error
+            Log.d("Error.Response", error.getMessage());
+            future.completeExceptionally(error);
+        }) {
             @Override
             protected Map<String, String> getParams() {
-                Map<String, String> params = new HashMap<String, String>();
-                params.put("__EVENTTARGET", "");
-                params.put("__EVENTARGUMENT", "");
-                params.put("__VIEWSTATE", viewState);
-                params.put("__VIEWSTATEGENERATOR", viewStateGenerator);
-                params.put("__EVENTVALIDATION", eventValidate);
-                params.put("Hakemuksen_Muokkaus_TAAAAAAAA$ucKayttajatoiminnot$ucKayttajatoiminnot_Kirjautuminen$Tunnus", "pyry.rouvila@gmail.com");
-                params.put("Hakemuksen_Muokkaus_TAAAAAAAA$ucKayttajatoiminnot$ucKayttajatoiminnot_Kirjautuminen$Salasana", "");
-                params.put("Hakemuksen_Muokkaus_TAAAAAAAA$ucKayttajatoiminnot$ucKayttajatoiminnot_Kirjautuminen$btnKirjaudu", "Kirjaudu");
-                params.put("Hakemuksen_Muokkaus_TAAAAAAAA$hdf_Count", "");
-
-                return params;
+                return ToasService.getLoginParams(pageFields);
             }
         };
-        Volley.newRequestQueue(getApplicationContext()).add(postRequest);
+
+        Volley.newRequestQueue(context).add(postRequest);
+        return future;
     }
 
-    private void getQueueNumbers(final String viewState, final String eventValidate, final String viewStateGenerator, final String muokkausCount) {
-        StringRequest postRequest = new StringRequest(Request.Method.POST, "http://naf.fi/dev/debug.html",
-                new Response.Listener<String>() {
-                    @Override
-                    public void onResponse(String response) {
-                        Document document = Jsoup.parse(response);
-                        Element applications = document.select("#Hakemuksen_Muokkaus_TAAAAAAAA_gv_ApplicationQueues").first();
-                        Elements rows = applications.select("tr");
+    private static Map<String, String> getLoginParams(PageFields pageFields) {
+        Map<String, String> params = ToasService.getBaseParams(pageFields);
+        params.put("Hakemuksen_Muokkaus_TAAAAAAAA$ucKayttajatoiminnot$ucKayttajatoiminnot_Kirjautuminen$Tunnus", "");
+        params.put("Hakemuksen_Muokkaus_TAAAAAAAA$ucKayttajatoiminnot$ucKayttajatoiminnot_Kirjautuminen$Salasana", "");
+        params.put("Hakemuksen_Muokkaus_TAAAAAAAA$ucKayttajatoiminnot$ucKayttajatoiminnot_Kirjautuminen$btnKirjaudu", "Kirjaudu");
+        params.put("Hakemuksen_Muokkaus_TAAAAAAAA$hdf_Count", "");
+        return params;
+    }
 
-                        DBHandler db = new DBHandler(getApplicationContext());
+    private static Map<String, String> getBaseParams(PageFields pageFields) {
+        Map<String, String> params = new HashMap<String, String>();
+        params.put("__EVENTTARGET", "");
+        params.put("__EVENTARGUMENT", "");
+        params.put("__VIEWSTATE", pageFields.viewState);
+        params.put("__VIEWSTATEGENERATOR", pageFields.viewStateGenerator);
+        params.put("__EVENTVALIDATION", pageFields.eventValidate);
+        params.put("Hakemuksen_Muokkaus_TAAAAAAAA$hdf_Count", pageFields.muokkausCount);
+        params.put("Hakemuksen_Muokkaus_TAAAAAAAA$gv_ApplicationList$ctl03$Jonotus", "Jonotusnumero");
+        return params;
+    }
 
-                        for(int i = 1; i < rows.size(); i++) {
-                            Element row = rows.get(i);
-                            Elements cols = row.select("td");
+    private static CompletableFuture<List<TOASPosition>> getQueueNumbers(Context context, PageFields pageFields) {
+        CompletableFuture<List<TOASPosition>> future = new CompletableFuture<>();
 
-                            String[] parts = cols.get(0).html().split(" ");
-                            int id = Integer.parseInt(parts[0]);
-                            String house = parts[1];
-                            int queue = Integer.parseInt(cols.get(1).html());
+        StringRequest postRequest = new StringRequest(Request.Method.POST, "http://naf.fi/dev/debug.html", (response) -> {
+            Document document = Jsoup.parse(response);
+            Element applications = document.select("#Hakemuksen_Muokkaus_TAAAAAAAA_gv_ApplicationQueues").first();
+            Elements rows = applications.select("tr");
 
-                            db.updateQueue(id, house, queue);
-                        }
-                        Log.d(";;;", "Done updating");
+            List<TOASPosition> positions = new ArrayList<>();
 
-                        // add time
-                        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
-                        SharedPreferences.Editor editor = prefs.edit();
+            for(int i = 1; i < rows.size(); i++) {
+                Element row = rows.get(i);
+                Elements cols = row.select("td");
 
-                        Date currentTime = Calendar.getInstance().getTime();
+                String[] parts = cols.get(0).html().split(" ");
+                int id = Integer.parseInt(parts[0]);
+                String house = parts[1];
+                int queue = Integer.parseInt(cols.get(1).html());
 
-                        editor.putString("lastsaved", currentTime.toString());
-                        editor.commit();
-                    }
-                },
-                new Response.ErrorListener() {
-                    @Override
-                    public void onErrorResponse(VolleyError error) {
-                        // error
-                        Log.d("Error.Response", error.getMessage());
-                    }
-                }
-        ) {
+                positions.add(new TOASPosition(id, house, queue));
+            }
+            Log.d(";;;", "Done updating");
+            future.complete(positions);
+
+        }, (VolleyError error) -> {
+            Log.d("Error.Response", error.getMessage());
+            future.completeExceptionally(error);
+        }) {
             @Override
             protected Map<String, String> getParams() {
-                Map<String, String> params = new HashMap<String, String>();
-                params.put("__EVENTTARGET", "");
-                params.put("__EVENTARGUMENT", "");
-                params.put("__VIEWSTATE", viewState);
-                params.put("__VIEWSTATEGENERATOR", viewStateGenerator);
-                params.put("__EVENTVALIDATION", eventValidate);
-                params.put("Hakemuksen_Muokkaus_TAAAAAAAA$hdf_Count", muokkausCount);
-                params.put("Hakemuksen_Muokkaus_TAAAAAAAA$gv_ApplicationList$ctl03$Jonotus", "Jonotusnumero");
-
-                return params;
+                return ToasService.getBaseParams(pageFields);
             }
         };
+
         int socketTimeout = 5 * 60 * 1000; // 5 min
         RetryPolicy policy = new DefaultRetryPolicy(socketTimeout, DefaultRetryPolicy.DEFAULT_MAX_RETRIES, DefaultRetryPolicy.DEFAULT_BACKOFF_MULT);
         postRequest.setRetryPolicy(policy);
-
-        Volley.newRequestQueue(getApplicationContext()).add(postRequest);
+        Volley.newRequestQueue(context).add(postRequest);
+        return future;
     }
 }
