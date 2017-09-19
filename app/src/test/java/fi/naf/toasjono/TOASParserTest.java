@@ -19,7 +19,7 @@ import static org.junit.Assert.*;
 
 public class TOASParserTest {
     @Test
-    public void addition_isCorrect() throws Exception {
+    public void parsesRightAmount() throws Exception {
         java.net.URL url = this.getClass().getClassLoader().getResource("test.html");
         String html = new java.util.Scanner(new File(url.toURI()),"UTF8").useDelimiter("\\Z").next();
 
